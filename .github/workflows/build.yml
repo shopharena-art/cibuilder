@@ -1,0 +1,150 @@
+name: build
+run-name: build-${{ inputs.run_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: "شناسهٔ فایل زیپ داخل draft release"
+        required: true
+      target:
+        description: "apk یا exe"
+        required: true
+      run_tag:
+        description: "شناسهٔ یکتا برای پیدا کردن این اجرا"
+        required: true
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  apk:
+    if: ${{ inputs.target == 'apk' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ASSET_ID: ${{ inputs.asset_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: prepare
+        run: bash .github/scripts/prepare.sh 2>&1 | tee -a build.log
+
+      - name: build apk
+        run: |
+          {
+            ROOT=$(dirname "$(find proj -maxdepth 3 \( -name gradlew -o -name settings.gradle -o -name settings.gradle.kts \) | head -1)")
+            echo "project root: $ROOT"
+            cd "$ROOT"
+            GR=./gradlew
+            if [ -f gradlew ]; then chmod +x gradlew; else GR=gradle; fi
+            if [ -n "${KEYSTORE_BASE64:-}" ]; then
+              echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/ks.jks"
+              $GR --no-daemon assembleRelease \
+                -Pandroid.injected.signing.store.file="$RUNNER_TEMP/ks.jks" \
+                -Pandroid.injected.signing.store.password="${KEYSTORE_PASSWORD:-}" \
+                -Pandroid.injected.signing.key.alias="${KEY_ALIAS:-}" \
+                -Pandroid.injected.signing.key.password="${KEY_PASSWORD:-}"
+            else
+              $GR --no-daemon assembleDebug
+            fi
+          } 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+
+      - name: collect output
+        if: always()
+        run: |
+          mkdir -p out
+          find proj -name '*.apk' -path '*outputs*' -exec cp {} out/ \; || true
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: log
+          path: build.log
+          retention-days: 1
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: output
+          path: out/*
+          retention-days: 1
+          if-no-files-found: ignore
+
+  exe:
+    if: ${{ inputs.target == 'exe' }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ASSET_ID: ${{ inputs.asset_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: prepare
+        run: bash .github/scripts/prepare.sh 2>&1 | tee -a build.log
+
+      - name: build exe
+        run: |
+          {
+            OUT="$GITHUB_WORKSPACE/out"
+            mkdir -p "$OUT"
+            CSPROJ=$(find proj -maxdepth 4 -name '*.csproj' | head -1)
+            SLN=$(find proj -maxdepth 4 -name '*.sln' | head -1)
+            CMAKE=$(find proj -maxdepth 3 -name CMakeLists.txt | head -1)
+            BAT=$(find proj -maxdepth 3 -name build.bat | head -1)
+            if [ -n "$CSPROJ" ]; then
+              echo "dotnet publish: $CSPROJ"
+              dotnet publish "$CSPROJ" -c Release -r win-x64 --self-contained false -o "$OUT"
+            elif [ -n "$SLN" ]; then
+              echo "dotnet build: $SLN"
+              dotnet build "$SLN" -c Release
+              find "$(dirname "$SLN")" -path '*bin/Release*' -name '*.exe' -exec cp {} "$OUT/" \;
+            elif [ -n "$CMAKE" ]; then
+              D=$(dirname "$CMAKE")
+              echo "cmake: $D"
+              cmake -S "$D" -B "$GITHUB_WORKSPACE/cmake-build"
+              cmake --build "$GITHUB_WORKSPACE/cmake-build" --config Release
+              find "$GITHUB_WORKSPACE/cmake-build" -name '*.exe' -not -path '*CMakeFiles*' -exec cp {} "$OUT/" \;
+            elif [ -n "$BAT" ]; then
+              D=$(dirname "$BAT")
+              echo "build.bat: $D"
+              (cd "$D" && cmd //c build.bat)
+              find "$D" -name '*.exe' -exec cp {} "$OUT/" \;
+            else
+              echo "نوع پروژه شناخته نشد (csproj, sln, CMakeLists.txt یا build.bat لازم است)"
+              exit 1
+            fi
+          } 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+
+      - name: list output
+        if: always()
+        run: ls -la out || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: log
+          path: build.log
+          retention-days: 1
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: output
+          path: out/*
+          retention-days: 1
+          if-no-files-found: ignore
