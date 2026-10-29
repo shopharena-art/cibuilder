@@ -13,6 +13,10 @@ on:
       run_tag:
         description: "شناسهٔ یکتا برای پیدا کردن این اجرا"
         required: true
+      release_id:
+        description: "شناسهٔ draft release موقت برای تحویل نتیجه"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -67,8 +71,16 @@ jobs:
           find proj -name '*.apk' -path '*outputs*' -exec cp {} out/ \; || true
           ls -la out
 
+      - name: upload results to release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: bash .github/scripts/upload.sh
+
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: log
           path: build.log
@@ -77,6 +89,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: output
           path: out/*
@@ -133,8 +146,16 @@ jobs:
         if: always()
         run: ls -la out || true
 
+      - name: upload results to release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: bash .github/scripts/upload.sh
+
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: log
           path: build.log
@@ -143,6 +164,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: output
           path: out/*
