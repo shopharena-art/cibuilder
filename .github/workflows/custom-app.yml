@@ -1,0 +1,42 @@
+name: custom
+run-name: build-${{ inputs.run_tag }}
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id: { required: true }
+      target: { required: true }
+      run_tag: { required: true }
+      release_id: { required: false, default: "" }
+permissions:
+  contents: write
+defaults:
+  run:
+    shell: bash
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ASSET_ID: ${{ inputs.asset_id }}
+      RELEASE_ID: ${{ inputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: prepare
+        run: bash .github/scripts/prepare.sh 2>&1 | tee -a build.log
+      - name: build
+        run: |
+          mkdir -p out
+          {
+            cd proj
+            if [ ! -f package.json ]; then cd "$(dirname "$(find . -maxdepth 2 -name package.json | head -1)")"; fi
+            npm install
+            npx electron-builder --win --x64 --publish never
+            cp dist/*.exe "$GITHUB_WORKSPACE/out/"
+          } 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+      - name: upload results
+        if: always()
+        run: bash .github/scripts/upload.sh
