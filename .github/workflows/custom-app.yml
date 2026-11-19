@@ -52,6 +52,9 @@ jobs:
             done
             rm -f "$GITHUB_WORKSPACE"/publish/*.pdb "$GITHUB_WORKSPACE"/publish/*.xml
             makensis -DSRC="$GITHUB_WORKSPACE/publish" -DOUT="$GITHUB_WORKSPACE/out/SimpleAcc-Setup.exe" "$ROOT/installer/setup.nsi"
+            VER=$(grep -oP '(?<=<Version>)[^<]+' "$CSPROJ" | head -n1)
+            SHA=$(sha256sum "$GITHUB_WORKSPACE/out/SimpleAcc-Setup.exe" | cut -d' ' -f1)
+            printf '{\n  "version": "%s",\n  "url": "SimpleAcc-Setup.exe",\n  "sha256": "%s",\n  "notes": "توضیح تغییرات این نسخه"\n}\n' "$VER" "$SHA" > "$GITHUB_WORKSPACE/out/update.json"
             (cd "$GITHUB_WORKSPACE/publish" && zip -r "$GITHUB_WORKSPACE/out/SimpleAcc-Portable.zip" .)
             ls -la out
           } 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
