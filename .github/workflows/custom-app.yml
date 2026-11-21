@@ -1,0 +1,64 @@
+name: custom
+run-name: build-${{ inputs.run_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id:   { required: true }
+      target:     { required: true }
+      run_tag:    { required: true }
+      release_id: { required: false, default: "" }
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ASSET_ID: ${{ inputs.asset_id }}
+      RELEASE_ID: ${{ inputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: prepare
+        run: bash .github/scripts/prepare.sh 2>&1 | tee -a build.log
+
+      - name: build
+        run: |
+          mkdir -p out
+          {
+            set -e
+            sudo apt-get update -y
+            sudo apt-get install -y nsis
+            CSPROJ=$(find proj -name SimpleAcc.csproj | head -n1)
+            [ -n "$CSPROJ" ] || { echo "SimpleAcc.csproj not found"; exit 1; }
+            ROOT=$(dirname "$CSPROJ")
+            dotnet build "$CSPROJ" -c Release -o "$GITHUB_WORKSPACE/publish"
+            # اطمینان از وجود SQLite native برای 32 و 64 بیت
+            for A in x86 x64; do
+              if [ ! -f "$GITHUB_WORKSPACE/publish/$A/SQLite.Interop.dll" ]; then
+                F=$(find ~/.nuget/packages/system.data.sqlite.core -path "*net45/$A/SQLite.Interop.dll" | head -n1)
+                [ -n "$F" ] || { echo "SQLite.Interop.dll ($A) not found"; exit 1; }
+                mkdir -p "$GITHUB_WORKSPACE/publish/$A"
+                cp "$F" "$GITHUB_WORKSPACE/publish/$A/"
+              fi
+            done
+            rm -f "$GITHUB_WORKSPACE"/publish/*.pdb "$GITHUB_WORKSPACE"/publish/*.xml
+            makensis -DSRC="$GITHUB_WORKSPACE/publish" -DOUT="$GITHUB_WORKSPACE/out/SimpleAcc-Setup.exe" "$ROOT/installer/setup.nsi"
+            VER=$(grep -oP '(?<=<Version>)[^<]+' "$CSPROJ" | head -n1)
+            SHA=$(sha256sum "$GITHUB_WORKSPACE/out/SimpleAcc-Setup.exe" | cut -d' ' -f1)
+            printf '{\n  "version": "%s",\n  "url": "SimpleAcc-Setup.exe",\n  "sha256": "%s",\n  "notes": "توضیح تغییرات این نسخه"\n}\n' "$VER" "$SHA" > "$GITHUB_WORKSPACE/out/update.json"
+            (cd "$GITHUB_WORKSPACE/publish" && zip -r "$GITHUB_WORKSPACE/out/SimpleAcc-Portable.zip" .)
+            ls -la out
+          } 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+
+      - name: upload results
+        if: always()
+        run: bash .github/scripts/upload.sh
